@@ -1,0 +1,89 @@
+# HG changeset patch
+# User Roy Smith <roy@s7labs.com>
+# Date 1316706028 0
+# Node ID a8dfca09ec6dbcbf481a5773a9c94e0c24af3599
+# Parent  8c78cf74beeb34a1f075f13df668eda238ca2af5
+Import mods from 1.4.11 branch.
+
+diff -r 8c78cf74beeb -r a8dfca09ec6d SUBVERS
+--- a/SUBVERS	Thu Sep 22 15:32:18 2011 +0000
++++ b/SUBVERS	Thu Sep 22 15:40:28 2011 +0000
+@@ -1,1 +1,2 @@
++/X-Unique-Request-Id
+ 
+diff -r 8c78cf74beeb -r a8dfca09ec6d VERDATE
+--- a/VERDATE	Thu Sep 22 15:32:18 2011 +0000
++++ b/VERDATE	Thu Sep 22 15:40:28 2011 +0000
+@@ -1,1 +1,1 @@
+-2011/09/16
++2011/09/22
+diff -r 8c78cf74beeb -r a8dfca09ec6d include/types/proxy.h
+--- a/include/types/proxy.h	Thu Sep 22 15:32:18 2011 +0000
++++ b/include/types/proxy.h	Thu Sep 22 15:40:28 2011 +0000
+@@ -316,6 +316,8 @@
+ 		struct eb_root used_listener_id;/* list of listener IDs in use */
+ 		struct eb_root used_server_id;	/* list of server IDs in use */
+ 	} conf;					/* config information */
++
++        int do_unique_request_id;	       	/* If true, turn on X-Unique-Request-Id processing */
+ };
+ 
+ struct switching_rule {
+diff -r 8c78cf74beeb -r a8dfca09ec6d src/cfgparse.c
+--- a/src/cfgparse.c	Thu Sep 22 15:32:18 2011 +0000
++++ b/src/cfgparse.c	Thu Sep 22 15:40:28 2011 +0000
+@@ -4544,6 +4544,9 @@
+ 			free(err);
+ 		}
+ 	}
++	else if (!strcmp(args[0], "unique-request-id")) { /* enable X-Unique-Request-Id processing */
++                curproxy->do_unique_request_id = 1;
++        }
+ 	else {
+ 		struct cfg_kw_list *kwl;
+ 		int index;
+diff -r 8c78cf74beeb -r a8dfca09ec6d src/proto_http.c
+--- a/src/proto_http.c	Thu Sep 22 15:32:18 2011 +0000
++++ b/src/proto_http.c	Thu Sep 22 15:40:28 2011 +0000
+@@ -2718,6 +2718,41 @@
+ 	/* transfer length unknown*/
+ 	txn->flags &= ~TX_REQ_XFER_LEN;
+ 
++        /* 4b: Insert header for tracing, if needed */
++        if (s->fe->do_unique_request_id) {
++                ctx.idx = 0;
++                const char hdr[] = "X-Unique-Request-Id";
++                const size_t hdr_len = sizeof(hdr);
++                if (! http_find_header2(hdr, hdr_len, msg->sol, &txn->hdr_idx, &ctx)) {
++                        const int max_counter = 1000 * 1000;   // fits in 32-bit signed int
++                        static int id_counter = max_counter;
++                        static char id_base[100];  // too lazy to figure out the exact minimum size needed
++                        if (id_counter >= max_counter) {
++                                /*
++                                 * We want the ids to be unique, so they need lots of
++                                 * entropy.  This is too expensive to do on every
++                                 * request.  So, do this every max_counter requests
++                                 * and append a counter per request.  I'm sure there
++                                 * are better ways to do this.
++                                 */
++                                long host_id;
++                                struct timeval tv;
++                                host_id = gethostid();
++                                gettimeofday(&tv, NULL);   // Not currently using tv_usec
++                                snprintf(id_base,
++                                         sizeof(id_base),
++                                         "%s: %X-%lX-",
++                                         hdr,
++                                         (unsigned int) host_id, 
++                                         tv.tv_sec);
++                                id_counter = 0;
++                        }
++                        char hdr_val[sizeof(id_base) + sizeof("1234567890")];  // enough digits for max_counter
++                        snprintf(hdr_val, sizeof(hdr_val), "%s%d", id_base, id_counter++);
++                        http_header_add_tail(req, &txn->req, &txn->hdr_idx, hdr_val);
++                }
++        }
++
+ 	/* 5: we may need to capture headers */
+ 	if (unlikely((s->logs.logwait & LW_REQHDR) && s->fe->req_cap))
+ 		capture_headers(msg->sol, &txn->hdr_idx,

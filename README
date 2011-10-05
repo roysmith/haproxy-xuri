@@ -21,14 +21,16 @@ verbosity, and generation efficiency.  See
 http://comments.gmane.org/gmane.comp.web.haproxy/4841 for a thread
 discussing the design.
 
-In our setup, we have multiple places where the unique id can be added.
-Our PHP code can add it, using apache's mod_unique_id module.  We also
-have some middleware in our django code which can add one.  In all
-cases, the basic logic is the same; if one is found in the incoming
-headers, leave it alone.  If there is none, add one.  Under normal
-operation, haproxy is the front end of the whole mess and the ids are
-added there.  In testing, however, we often fire HTTP requests and
-individual components, and this lets those get ids as well.
+In our setup, we have multiple places where the unique id can be
+added.  Our PHP code can add it, using apache's mod_unique_id module.
+We also have some middleware in our django code which can add one.  In
+all cases, the basic logic is the same; if one is found in the
+incoming headers, leave it alone.  If there is none, add one.  Under
+normal operation, haproxy is the front end of the whole mess and the
+ids are added there.  In testing, however, we often fire HTTP requests
+at individual components, and this lets those get ids as well.  All of
+our id generators use different formats.  While perhaps esthetically
+displeasing, this doesn't seem to cause any problems.
 
 Everything logs the id with every log message.  Proxies pass the headers
 along to downsteam servers.  Servers which generate HTTP requests of

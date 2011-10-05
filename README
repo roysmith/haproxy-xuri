@@ -1,0 +1,65 @@
+In a complex web site, there can be many independent processes involved
+in serving a single HTTP request.  For example, on the songza.com
+website, we had PHP code running under Apache, django code running under
+gunicorn, a half-dozen ancillary HTTP services running under Tornado,
+memcache, redis, and mongodb.  These run on multiple hosts, woven
+together with multiple instances of haproxy and nginx.  Each of these
+processes log information about what they are doing, but it can be near
+impossible to trace any given request through all the moving parts.
+
+This patch adds to haproxy the ability to generate a unique id for each
+incoming request.  The incoming request headers are scanned for an
+existing X-Unique-Request-Id header.  If such a header is found, it is
+left unchanged.  If no such header exists, one is added and an id string
+generated.
+
+The format of the id string is specified in proto_http.c, and includes
+the hostid, a timestamp, and a counter.  The exact format is not
+important, and could be altered if desired.  This format was chosen as a
+reasonable compromise between carrying useful information, excessive
+verbosity, and generation efficiency.  See
+http://comments.gmane.org/gmane.comp.web.haproxy/4841 for a thread
+discussing the design.
+
+In our setup, we have multiple places where the unique id can be added.
+Our PHP code can add it, using apache's mod_unique_id module.  We also
+have some middleware in our django code which can add one.  In all
+cases, the basic logic is the same; if one is found in the incoming
+headers, leave it alone.  If there is none, add one.  Under normal
+operation, haproxy is the front end of the whole mess and the ids are
+added there.  In testing, however, we often fire HTTP requests and
+individual components, and this lets those get ids as well.
+
+Everything logs the id with every log message.  Proxies pass the headers
+along to downsteam servers.  Servers which generate HTTP requests of
+their own, to other services, add the id to their outgoing headers as
+well.  We have some services which communicate over JSON-ized objects
+pushed onto beanstalk queues; we insert the id as an attribute on those
+objects too, so the services on the other end of the queue can log them.
+
+Our nginx configs have something like:
+
+    log_format unique '$remote_addr - $remote_user [$time_local] \
+           {$http_x_unique_request_id} "$request" $status \
+           $body_bytes_sent "$http_referer" "$http_user_agent"';
+    access_log /var/log/nginx/nginx-access unique;
+
+in them.  Haproxy config looks like:
+
+        unique-request-id
+        capture request header X-Unique-Request-Id len 64
+
+In operation, when you find something in a log that you want to
+investigate more, you pull out the logged unique id field, and grep for
+that in every log file in the universe.  Anything that pops out was, in
+some way, related to serving that request.
+
+Problems:
+
+Life is not all 100% peachy.  The above scheme works for services
+communicating over HTTP.  It also works for services were we have
+substantial control over the communication protocol (i.e. the
+beanstalk/JSON setup described above).  If fails, however, for things
+like memcache and mongodb where there is a pre-defined communication
+protocol that we can't alter.  We don't yet have a good solution for
+these.

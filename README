@@ -1,6 +1,6 @@
 In a complex web site, there can be many independent processes involved
 in serving a single HTTP request.  For example, on the songza.com
-website, we had PHP code running under Apache, django code running under
+website, we have PHP code running under Apache, django code running under
 gunicorn, a half-dozen ancillary HTTP services running under Tornado,
 memcache, redis, and mongodb.  These run on multiple hosts, woven
 together with multiple instances of haproxy and nginx.  Each of these
